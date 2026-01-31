@@ -19,6 +19,7 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
   const [copied, setCopied] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
+  const [pendingPeerId, setPendingPeerId] = useState<string | null>(null); // Store peer ID for answer
 
   const currentUser = useUserStore((state) => state.currentUser);
   const { createOffer, acceptOffer, acceptAnswer, registerPeer } = useWebRTC();
@@ -54,6 +55,7 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
       });
 
       setInviteCode(encoded);
+      setPendingPeerId(peerId); // Store for later when accepting answer
       toast.success('Invite code generated!');
     } catch (error) {
       console.error('Failed to generate invite:', error);
@@ -149,6 +151,11 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
       return;
     }
 
+    if (!pendingPeerId) {
+      toast.error('No pending connection. Please generate an invite first.');
+      return;
+    }
+
     setIsJoining(true);
 
     try {
@@ -161,10 +168,10 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
         return;
       }
 
-      const { peerId, answer, userInfo } = decoded.data;
+      const { answer, userInfo } = decoded.data;
 
-      // Accept the answer
-      await acceptAnswer(peerId, answer);
+      // Accept the answer using the pending peer ID (from our original offer)
+      await acceptAnswer(pendingPeerId, answer);
 
       // Register the peer
       registerPeer(userInfo);
@@ -174,6 +181,7 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
       // Clear codes and close
       setJoinCode('');
       setInviteCode('');
+      setPendingPeerId(null);
       onClose();
     } catch (error) {
       console.error('Failed to accept answer:', error);
