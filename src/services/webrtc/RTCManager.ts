@@ -1,4 +1,4 @@
-import { PeerConnection, PeerInfo, ProtocolMessage } from '@/types';
+import { PeerConnection, ProtocolMessage } from '@/types';
 
 export class RTCManager {
   private peers: Map<string, PeerConnection> = new Map();
