@@ -1,19 +1,22 @@
+import { useUserStore } from './store/userStore';
+import { GuestLogin } from './components/auth/GuestLogin';
+import { MainLayout } from './components/layout/MainLayout';
+import { ChatArea } from './components/chat/ChatArea';
+
 function App() {
+  const currentUser = useUserStore((state) => state.currentUser);
+
+  // Show login screen if no user is logged in
+  if (!currentUser) {
+    return <GuestLogin />;
+  }
+
+  // Show main app if user is logged in
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-4">
-          ShadowTalk
-        </h1>
-        <p className="text-lg text-gray-600 dark:text-gray-300">
-          Decentralized P2P Chat Application
-        </p>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-          Setting up...
-        </p>
-      </div>
-    </div>
-  )
+    <MainLayout>
+      <ChatArea />
+    </MainLayout>
+  );
 }
 
 export default App
