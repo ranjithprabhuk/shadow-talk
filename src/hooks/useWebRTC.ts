@@ -1,171 +1,137 @@
-import { useEffect, useRef, useCallback } from 'react';
-import { RTCManager } from '@/services/webrtc/RTCManager';
+import { useEffect, useCallback } from 'react';
+import { RTCManager, OfferWithCandidates, AnswerWithCandidates } from '@/services/webrtc/RTCManager';
 import { ProtocolMessage, PeerInfo } from '@/types';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePeerStore } from '@/store/peerStore';
 
+// Persist RTCManager on window so it survives Vite HMR module re-evaluation.
+// Without this, HMR creates a new RTCManager while live WebRTC connections
+// remain on the old orphaned instance, causing messages to never be received.
+const WIN_KEY = '__shadowtalk_rtc__';
+
+function getRTCManager(stunServers?: string[], turnServers?: RTCIceServer[]): RTCManager {
+  const w = window as any;
+  if (!w[WIN_KEY]) {
+    w[WIN_KEY] = new RTCManager(stunServers, turnServers);
+  }
+  return w[WIN_KEY] as RTCManager;
+}
+
 export const useWebRTC = () => {
-  const rtcManagerRef = useRef<RTCManager | null>(null);
   const stunServers = useSettingsStore((state) => state.stunServers);
+  const turnServers = useSettingsStore((state) => state.turnServers);
   const addPeer = usePeerStore((state) => state.addPeer);
   const removePeer = usePeerStore((state) => state.removePeer);
 
-  // Initialize RTCManager
+  // Setup connection callbacks on every render of the first component that uses this hook.
+  // We always re-assign so that after HMR the callbacks point to current store references.
   useEffect(() => {
-    if (!rtcManagerRef.current) {
-      rtcManagerRef.current = new RTCManager(stunServers);
+    const manager = getRTCManager(stunServers, turnServers);
 
-      // Setup callbacks
-      rtcManagerRef.current.onConnectionStateChange = (peerId, state) => {
-        console.log(`Connection state changed for ${peerId}:`, state);
+    manager.onConnectionStateChange = (peerId, state) => {
+      console.log(`[WebRTC] Connection state for ${peerId}:`, state);
 
-        if (state === 'connected') {
-          // Peer connected successfully
-          console.log(`Peer ${peerId} connected`);
-        } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
-          // Peer disconnected
-          console.log(`Peer ${peerId} disconnected`);
-          removePeer(peerId);
-        }
-      };
-
-      rtcManagerRef.current.onDataChannelClose = (peerId) => {
-        console.log(`Data channel closed for ${peerId}`);
-        removePeer(peerId);
-      };
-    }
-
-    return () => {
-      // Cleanup on unmount
-      rtcManagerRef.current?.closeAll();
-    };
-  }, [stunServers, removePeer]);
-
-  /**
-   * Create an offer to connect to a peer
-   */
-  const createOffer = useCallback(
-    async (peerId: string): Promise<RTCSessionDescriptionInit> => {
-      if (!rtcManagerRef.current) {
-        throw new Error('RTCManager not initialized');
+      if (state === 'connected') {
+        console.log(`[WebRTC] Peer ${peerId} connected`);
+      } else if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+        console.log(`[WebRTC] Peer ${peerId} disconnected`);
+        usePeerStore.getState().removePeer(peerId);
       }
-      return rtcManagerRef.current.createOffer(peerId);
+    };
+
+    manager.onDataChannelClose = (peerId) => {
+      console.log(`[WebRTC] Data channel closed for ${peerId}`);
+      usePeerStore.getState().removePeer(peerId);
+    };
+  }, [stunServers, addPeer, removePeer]);
+
+  const createOffer = useCallback(
+    async (peerId: string): Promise<OfferWithCandidates> => {
+      const manager = getRTCManager();
+      return manager.createOffer(peerId);
     },
     []
   );
 
-  /**
-   * Accept an offer from a peer
-   */
   const acceptOffer = useCallback(
     async (
       peerId: string,
-      offer: RTCSessionDescriptionInit
-    ): Promise<RTCSessionDescriptionInit> => {
-      if (!rtcManagerRef.current) {
-        throw new Error('RTCManager not initialized');
-      }
-      return rtcManagerRef.current.acceptOffer(peerId, offer);
+      offer: RTCSessionDescriptionInit,
+      remoteCandidates: RTCIceCandidateInit[]
+    ): Promise<AnswerWithCandidates> => {
+      const manager = getRTCManager();
+      return manager.acceptOffer(peerId, offer, remoteCandidates);
     },
     []
   );
 
-  /**
-   * Accept an answer from a peer
-   */
   const acceptAnswer = useCallback(
-    async (peerId: string, answer: RTCSessionDescriptionInit): Promise<void> => {
-      if (!rtcManagerRef.current) {
-        throw new Error('RTCManager not initialized');
-      }
-      return rtcManagerRef.current.acceptAnswer(peerId, answer);
+    async (
+      peerId: string,
+      answer: RTCSessionDescriptionInit,
+      remoteCandidates: RTCIceCandidateInit[]
+    ): Promise<void> => {
+      const manager = getRTCManager();
+      return manager.acceptAnswer(peerId, answer, remoteCandidates);
     },
     []
   );
 
-  /**
-   * Add ICE candidate
-   */
   const addIceCandidate = useCallback(
     async (peerId: string, candidate: RTCIceCandidateInit): Promise<void> => {
-      if (!rtcManagerRef.current) {
-        throw new Error('RTCManager not initialized');
-      }
-      return rtcManagerRef.current.addIceCandidate(peerId, candidate);
+      const manager = getRTCManager();
+      return manager.addIceCandidate(peerId, candidate);
     },
     []
   );
 
-  /**
-   * Send message to a peer
-   */
   const sendMessage = useCallback(
     (peerId: string, message: ProtocolMessage): void => {
-      if (!rtcManagerRef.current) {
-        throw new Error('RTCManager not initialized');
-      }
-      rtcManagerRef.current.sendMessage(peerId, message);
+      const manager = getRTCManager();
+      manager.sendMessage(peerId, message);
     },
     []
   );
 
-  /**
-   * Broadcast message to all peers
-   */
   const broadcastMessage = useCallback((message: ProtocolMessage): void => {
-    if (!rtcManagerRef.current) {
-      throw new Error('RTCManager not initialized');
-    }
-    rtcManagerRef.current.broadcastMessage(message);
+    const manager = getRTCManager();
+    manager.broadcastMessage(message);
   }, []);
 
-  /**
-   * Close connection to a peer
-   */
   const closePeer = useCallback(
     (peerId: string): void => {
-      if (!rtcManagerRef.current) return;
-      rtcManagerRef.current.closePeer(peerId);
+      const manager = getRTCManager();
+      manager.closePeer(peerId);
       removePeer(peerId);
     },
     [removePeer]
   );
 
-  /**
-   * Get connected peers
-   */
   const getConnectedPeers = useCallback((): string[] => {
-    if (!rtcManagerRef.current) return [];
-    return rtcManagerRef.current.getConnectedPeers();
+    const manager = getRTCManager();
+    return manager.getConnectedPeers();
   }, []);
 
-  /**
-   * Set message handler
-   */
   const setMessageHandler = useCallback(
     (handler: (peerId: string, message: ProtocolMessage) => void) => {
-      if (rtcManagerRef.current) {
-        rtcManagerRef.current.onMessage = handler;
-      }
+      const manager = getRTCManager();
+      console.log('[WebRTC] Setting message handler on RTCManager');
+      manager.onMessage = (peerId, message) => {
+        console.log(`[WebRTC] onMessage fired from ${peerId}:`, message.type);
+        handler(peerId, message);
+      };
     },
     []
   );
 
-  /**
-   * Set ICE candidate handler
-   */
   const setIceCandidateHandler = useCallback(
     (handler: (peerId: string, candidate: RTCIceCandidate) => void) => {
-      if (rtcManagerRef.current) {
-        rtcManagerRef.current.onIceCandidate = handler;
-      }
+      const manager = getRTCManager();
+      manager.onIceCandidate = handler;
     },
     []
   );
 
-  /**
-   * Add peer info when connection is established
-   */
   const registerPeer = useCallback(
     (peerInfo: PeerInfo) => {
       addPeer(peerInfo);
@@ -185,6 +151,6 @@ export const useWebRTC = () => {
     setMessageHandler,
     setIceCandidateHandler,
     registerPeer,
-    rtcManager: rtcManagerRef.current,
+    rtcManager: getRTCManager(),
   };
 };

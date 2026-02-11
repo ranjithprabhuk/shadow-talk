@@ -1,13 +1,48 @@
 import { PeerConnection, ProtocolMessage } from '@/types';
 
+export interface OfferWithCandidates {
+  offer: RTCSessionDescriptionInit;
+  candidates: RTCIceCandidateInit[];
+}
+
+export interface AnswerWithCandidates {
+  answer: RTCSessionDescriptionInit;
+  candidates: RTCIceCandidateInit[];
+}
+
+// Default TURN servers for NAT traversal (Metered free relay)
+const DEFAULT_TURN_CREDENTIAL = '2D7JvfXbwbhPMz3R';
+const DEFAULT_TURN_USERNAME = 'e8dd65b92a0ddd3da91b33de';
+
+const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  {
+    urls: 'turn:a.relay.metered.ca:80',
+    username: DEFAULT_TURN_USERNAME,
+    credential: DEFAULT_TURN_CREDENTIAL,
+  },
+  {
+    urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+    username: DEFAULT_TURN_USERNAME,
+    credential: DEFAULT_TURN_CREDENTIAL,
+  },
+  {
+    urls: 'turn:a.relay.metered.ca:443',
+    username: DEFAULT_TURN_USERNAME,
+    credential: DEFAULT_TURN_CREDENTIAL,
+  },
+  {
+    urls: 'turns:a.relay.metered.ca:443?transport=tcp',
+    username: DEFAULT_TURN_USERNAME,
+    credential: DEFAULT_TURN_CREDENTIAL,
+  },
+];
+
 export class RTCManager {
   private peers: Map<string, PeerConnection> = new Map();
   private configuration: RTCConfiguration = {
-    iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-    ],
+    iceServers: DEFAULT_ICE_SERVERS,
   };
 
   // Callbacks for events
@@ -18,16 +53,64 @@ export class RTCManager {
   public onDataChannelClose?: (peerId: string) => void;
   public onRemoteTrack?: (peerId: string, stream: MediaStream) => void;
 
-  constructor(stunServers?: string[]) {
-    if (stunServers && stunServers.length > 0) {
-      this.configuration.iceServers = stunServers.map((url) => ({ urls: url }));
+  constructor(stunServers?: string[], turnServers?: RTCIceServer[]) {
+    // Only override defaults if custom servers are explicitly provided
+    if ((stunServers && stunServers.length > 0) || (turnServers && turnServers.length > 0)) {
+      const iceServers: RTCIceServer[] = [];
+
+      if (stunServers && stunServers.length > 0) {
+        iceServers.push(...stunServers.map((url) => ({ urls: url })));
+      }
+      if (turnServers && turnServers.length > 0) {
+        iceServers.push(...turnServers);
+      }
+
+      this.configuration.iceServers = iceServers;
     }
+
+    console.log(`[RTCManager] Configured with ${this.configuration.iceServers!.length} ICE servers (STUN + TURN)`);
   }
 
   /**
-   * Create an offer to establish a connection with a peer
+   * Collect all ICE candidates until gathering completes or times out.
+   * Returns the collected candidates as serializable objects.
    */
-  async createOffer(peerId: string): Promise<RTCSessionDescriptionInit> {
+  private collectIceCandidates(pc: RTCPeerConnection, timeout = 10000): Promise<RTCIceCandidateInit[]> {
+    return new Promise((resolve) => {
+      const candidates: RTCIceCandidateInit[] = [];
+
+      const done = () => {
+        console.log(`[RTCManager] Collected ${candidates.length} ICE candidates`);
+        resolve(candidates);
+      };
+
+      const timeoutId = setTimeout(() => {
+        console.log('[RTCManager] ICE candidate collection timed out');
+        pc.removeEventListener('icecandidate', handleCandidate);
+        done();
+      }, timeout);
+
+      const handleCandidate = (event: RTCPeerConnectionIceEvent) => {
+        if (event.candidate) {
+          console.log(`[RTCManager] ICE candidate: ${event.candidate.candidate.substring(0, 60)}...`);
+          candidates.push(event.candidate.toJSON());
+        } else {
+          // null candidate means gathering is complete
+          console.log('[RTCManager] ICE gathering complete (null candidate)');
+          clearTimeout(timeoutId);
+          pc.removeEventListener('icecandidate', handleCandidate);
+          done();
+        }
+      };
+
+      pc.addEventListener('icecandidate', handleCandidate);
+    });
+  }
+
+  /**
+   * Create an offer with collected ICE candidates.
+   */
+  async createOffer(peerId: string): Promise<OfferWithCandidates> {
     const pc = new RTCPeerConnection(this.configuration);
 
     // Create data channel (as offerer)
@@ -36,7 +119,7 @@ export class RTCManager {
     });
 
     this.setupDataChannel(peerId, dataChannel);
-    this.setupPeerConnection(peerId, pc);
+    this.setupConnectionHandlers(peerId, pc);
 
     // Store peer connection
     this.peers.set(peerId, {
@@ -47,26 +130,42 @@ export class RTCManager {
       status: 'connecting',
     });
 
-    // Create and set local description
+    // Create offer
     const offer = await pc.createOffer();
+
+    // Start collecting ICE candidates BEFORE setLocalDescription
+    // (setLocalDescription triggers ICE gathering)
+    const candidatePromise = this.collectIceCandidates(pc);
+
     await pc.setLocalDescription(offer);
 
-    return offer;
+    // Wait for all candidates to be gathered
+    const candidates = await candidatePromise;
+
+    console.log(`[RTCManager] createOffer complete: ${candidates.length} candidates`);
+
+    return {
+      offer: { type: offer.type, sdp: pc.localDescription!.sdp },
+      candidates,
+    };
   }
 
   /**
-   * Accept an offer and create an answer
+   * Accept an offer and create an answer with collected ICE candidates.
+   * Also adds the remote ICE candidates from the offer.
    */
   async acceptOffer(
     peerId: string,
-    offer: RTCSessionDescriptionInit
-  ): Promise<RTCSessionDescriptionInit> {
+    offer: RTCSessionDescriptionInit,
+    remoteCandidates: RTCIceCandidateInit[]
+  ): Promise<AnswerWithCandidates> {
     const pc = new RTCPeerConnection(this.configuration);
 
-    this.setupPeerConnection(peerId, pc);
+    this.setupConnectionHandlers(peerId, pc);
 
     // Handle incoming data channel
     pc.ondatachannel = (event) => {
+      console.log(`[RTCManager] Received data channel from ${peerId}`);
       this.setupDataChannel(peerId, event.channel);
       const peerConn = this.peers.get(peerId);
       if (peerConn) {
@@ -83,20 +182,46 @@ export class RTCManager {
       status: 'connecting',
     });
 
-    // Set remote description and create answer
+    // Set remote description
     await pc.setRemoteDescription(offer);
+
+    // Add remote ICE candidates from the offer
+    for (const candidate of remoteCandidates) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log(`[RTCManager] Added remote candidate from offer`);
+      } catch (err) {
+        console.warn('[RTCManager] Failed to add remote candidate:', err);
+      }
+    }
+
+    // Create answer
     const answer = await pc.createAnswer();
+
+    // Start collecting ICE candidates BEFORE setLocalDescription
+    const candidatePromise = this.collectIceCandidates(pc);
+
     await pc.setLocalDescription(answer);
 
-    return answer;
+    // Wait for all candidates to be gathered
+    const candidates = await candidatePromise;
+
+    console.log(`[RTCManager] acceptOffer complete: ${candidates.length} candidates`);
+
+    return {
+      answer: { type: answer.type, sdp: pc.localDescription!.sdp },
+      candidates,
+    };
   }
 
   /**
-   * Accept an answer to complete the connection
+   * Accept an answer to complete the connection.
+   * Also adds the remote ICE candidates from the answer.
    */
   async acceptAnswer(
     peerId: string,
-    answer: RTCSessionDescriptionInit
+    answer: RTCSessionDescriptionInit,
+    remoteCandidates: RTCIceCandidateInit[]
   ): Promise<void> {
     const peer = this.peers.get(peerId);
     if (!peer) {
@@ -104,6 +229,18 @@ export class RTCManager {
     }
 
     await peer.connection.setRemoteDescription(answer);
+
+    // Add remote ICE candidates from the answer
+    for (const candidate of remoteCandidates) {
+      try {
+        await peer.connection.addIceCandidate(new RTCIceCandidate(candidate));
+        console.log(`[RTCManager] Added remote candidate from answer`);
+      } catch (err) {
+        console.warn('[RTCManager] Failed to add remote candidate:', err);
+      }
+    }
+
+    console.log(`[RTCManager] acceptAnswer complete, connection state: ${peer.connection.connectionState}`);
   }
 
   /**
@@ -136,11 +273,12 @@ export class RTCManager {
     }
 
     if (peer.dataChannel.readyState !== 'open') {
-      throw new Error(`Data channel not open for peer ${peerId}`);
+      throw new Error(`Data channel not open for peer ${peerId} (state: ${peer.dataChannel.readyState})`);
     }
 
     try {
       const data = JSON.stringify(message);
+      console.log(`[RTCManager] Sending to ${peerId}, channel: ${peer.dataChannel.readyState}, conn: ${peer.connection.connectionState}`);
       peer.dataChannel.send(data);
     } catch (error) {
       console.error('Error sending message:', error);
@@ -149,25 +287,36 @@ export class RTCManager {
   }
 
   /**
-   * Broadcast a message to all connected peers
+   * Broadcast a message to all connected peers.
+   * Returns the number of peers the message was actually sent to.
    */
-  broadcastMessage(message: ProtocolMessage): void {
+  broadcastMessage(message: ProtocolMessage): number {
+    let sentCount = 0;
     const errors: string[] = [];
 
     this.peers.forEach((peer, peerId) => {
       try {
         if (peer.dataChannel?.readyState === 'open') {
           this.sendMessage(peerId, message);
+          sentCount++;
+        } else {
+          console.warn(
+            `Skipping peer ${peerId}: channel=${peer.dataChannel ? peer.dataChannel.readyState : 'none'}`
+          );
         }
       } catch (error) {
         errors.push(peerId);
-        console.error(`Failed to send message to ${peerId}:`, error);
+        console.error(`Failed to send to ${peerId}:`, error);
       }
     });
 
-    if (errors.length > 0) {
-      console.warn(`Failed to broadcast to ${errors.length} peer(s):`, errors);
+    console.log(`[RTCManager] Broadcast to ${sentCount}/${this.peers.size} peers`);
+
+    if (sentCount === 0 && this.peers.size > 0) {
+      throw new Error('No peers with open data channels');
     }
+
+    return sentCount;
   }
 
   /**
@@ -179,7 +328,6 @@ export class RTCManager {
       throw new Error(`Peer ${peerId} not found`);
     }
 
-    // Add all tracks from the stream
     stream.getTracks().forEach((track) => {
       peer.connection.addTrack(track, stream);
     });
@@ -194,7 +342,6 @@ export class RTCManager {
     const peer = this.peers.get(peerId);
     if (!peer) return;
 
-    // Stop all local tracks
     peer.mediaStream?.getTracks().forEach((track) => {
       track.stop();
     });
@@ -209,18 +356,12 @@ export class RTCManager {
     const peer = this.peers.get(peerId);
     if (!peer) return;
 
-    // Close data channel
     if (peer.dataChannel) {
       peer.dataChannel.close();
     }
 
-    // Stop media streams
     this.removeMediaStream(peerId);
-
-    // Close peer connection
     peer.connection.close();
-
-    // Remove from map
     this.peers.delete(peerId);
   }
 
@@ -259,24 +400,29 @@ export class RTCManager {
    */
   private setupDataChannel(peerId: string, channel: RTCDataChannel): void {
     channel.onopen = () => {
-      console.log(`Data channel opened with ${peerId}`);
+      console.log(`[RTCManager] Data channel OPENED with ${peerId}`);
       this.updatePeerStatus(peerId, 'connected');
       this.onDataChannelOpen?.(peerId);
     };
 
     channel.onclose = () => {
-      console.log(`Data channel closed with ${peerId}`);
+      console.log(`[RTCManager] Data channel closed with ${peerId}`);
       this.onDataChannelClose?.(peerId);
     };
 
     channel.onerror = (error) => {
-      console.error(`Data channel error with ${peerId}:`, error);
+      console.error(`[RTCManager] Data channel error with ${peerId}:`, error);
     };
 
     channel.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as ProtocolMessage;
-        this.onMessage?.(peerId, message);
+        console.log(`[RTCManager] Received ${message.type} from ${peerId}`);
+        if (this.onMessage) {
+          this.onMessage(peerId, message);
+        } else {
+          console.error('[RTCManager] onMessage NOT set! Message dropped.');
+        }
       } catch (error) {
         console.error('Error parsing message:', error);
       }
@@ -284,51 +430,39 @@ export class RTCManager {
   }
 
   /**
-   * Setup peer connection event handlers
+   * Setup peer connection event handlers (renamed to avoid confusion)
    */
-  private setupPeerConnection(peerId: string, pc: RTCPeerConnection): void {
-    // ICE candidate handler
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.onIceCandidate?.(peerId, event.candidate);
-      }
-    };
+  private setupConnectionHandlers(peerId: string, pc: RTCPeerConnection): void {
+    // ICE candidates are collected explicitly via collectIceCandidates().
+    // No onicecandidate handler needed here.
 
-    // Connection state change handler
     pc.onconnectionstatechange = () => {
-      console.log(`Connection state: ${pc.connectionState} for peer ${peerId}`);
+      console.log(`[RTCManager] Connection: ${pc.connectionState} for ${peerId}`);
       this.updatePeerStatus(peerId, pc.connectionState);
       this.onConnectionStateChange?.(peerId, pc.connectionState);
 
-      // Clean up if connection failed or closed
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         this.closePeer(peerId);
       }
     };
 
-    // ICE connection state change handler
     pc.oniceconnectionstatechange = () => {
-      console.log(`ICE connection state: ${pc.iceConnectionState} for peer ${peerId}`);
+      console.log(`[RTCManager] ICE: ${pc.iceConnectionState} for ${peerId}`);
 
       if (pc.iceConnectionState === 'failed') {
-        // Try ICE restart
-        console.log(`ICE failed for ${peerId}, attempting restart`);
+        console.log(`[RTCManager] ICE failed for ${peerId}, attempting restart`);
         pc.restartIce();
       }
     };
 
-    // Remote track handler (for media streams)
     pc.ontrack = (event) => {
-      console.log(`Received remote track from ${peerId}`);
+      console.log(`[RTCManager] Remote track from ${peerId}`);
       if (event.streams && event.streams[0]) {
         this.onRemoteTrack?.(peerId, event.streams[0]);
       }
     };
   }
 
-  /**
-   * Update peer connection status
-   */
   private updatePeerStatus(
     peerId: string,
     state: RTCPeerConnectionState | 'connected'
@@ -339,9 +473,6 @@ export class RTCManager {
     }
   }
 
-  /**
-   * Update STUN servers configuration
-   */
   updateStunServers(servers: string[]): void {
     this.configuration.iceServers = servers.map((url) => ({ urls: url }));
   }

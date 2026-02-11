@@ -35,6 +35,28 @@ const defaultSettings: Settings = {
     'stun:stun.l.google.com:19302',
     'stun:stun1.l.google.com:19302',
   ],
+  turnServers: [
+    {
+      urls: 'turn:a.relay.metered.ca:80',
+      username: 'e8dd65b92a0ddd3da91b33de',
+      credential: '2D7JvfXbwbhPMz3R',
+    },
+    {
+      urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+      username: 'e8dd65b92a0ddd3da91b33de',
+      credential: '2D7JvfXbwbhPMz3R',
+    },
+    {
+      urls: 'turn:a.relay.metered.ca:443',
+      username: 'e8dd65b92a0ddd3da91b33de',
+      credential: '2D7JvfXbwbhPMz3R',
+    },
+    {
+      urls: 'turns:a.relay.metered.ca:443?transport=tcp',
+      username: 'e8dd65b92a0ddd3da91b33de',
+      credential: '2D7JvfXbwbhPMz3R',
+    },
+  ],
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -88,6 +110,13 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'shadowtalk-settings',
+      // Merge persisted state with defaults so new fields (like turnServers) are available
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<SettingsState>),
+        // Always ensure turnServers exists (missing from old persisted data)
+        turnServers: (persisted as any)?.turnServers ?? defaultSettings.turnServers,
+      }),
     }
   )
 );

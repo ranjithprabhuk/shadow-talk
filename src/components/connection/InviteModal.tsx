@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { QRCodeSVG } from 'qrcode.react';
-import { Copy, Check, QrCode } from 'lucide-react';
+import { Copy, Check, Link2 } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
 import { SignalingService } from '@/services/signaling/SignalingService';
 import { useWebRTC } from '@/hooks/useWebRTC';
@@ -39,11 +38,11 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
       // Generate unique peer ID for this connection
       const peerId = `peer-${Date.now()}-${crypto.randomUUID()}`;
 
-      // Create WebRTC offer
-      const offer = await createOffer(peerId);
+      // Create WebRTC offer (includes ICE candidates)
+      const { offer, candidates } = await createOffer(peerId);
 
-      // Encode offer with user info
-      const encoded = SignalingService.encodeOffer(peerId, offer, {
+      // Encode offer with user info and ICE candidates
+      const encoded = SignalingService.encodeOffer(peerId, offer, candidates, {
         peerId: currentUser.peerId,
         name: currentUser.name,
         gender: currentUser.gender,
@@ -100,18 +99,19 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
         return;
       }
 
-      const { peerId, offer, userInfo } = decoded.data;
+      const { peerId, offer, candidates: remoteCandidates, userInfo } = decoded.data;
 
-      // Accept the offer and create answer
-      const answer = await acceptOffer(peerId, offer);
+      // Accept the offer and create answer (pass remote ICE candidates)
+      const { answer, candidates: localCandidates } = await acceptOffer(peerId, offer, remoteCandidates || []);
 
       // Register the peer
       registerPeer(userInfo);
 
-      // Encode answer with our user info
+      // Encode answer with our user info and ICE candidates
       const answerEncoded = SignalingService.encodeAnswer(
         currentUser.peerId,
         answer,
+        localCandidates,
         {
           peerId: currentUser.peerId,
           name: currentUser.name,
@@ -168,10 +168,10 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
         return;
       }
 
-      const { answer, userInfo } = decoded.data;
+      const { answer, candidates: remoteCandidates, userInfo } = decoded.data;
 
       // Accept the answer using the pending peer ID (from our original offer)
-      await acceptAnswer(pendingPeerId, answer);
+      await acceptAnswer(pendingPeerId, answer, remoteCandidates || []);
 
       // Register the peer
       registerPeer(userInfo);
@@ -223,7 +223,7 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
           <div className="space-y-4">
             {!inviteCode ? (
               <div className="text-center py-8">
-                <QrCode size={64} className="mx-auto text-gray-300 dark:text-gray-600 mb-4" />
+                <Link2 size={64} className="mx-auto text-gray-300 dark:text-gray-600 mb-4" />
                 <h3 className="text-lg font-semibold mb-2">Generate Invite Code</h3>
                 <p className="text-gray-600 dark:text-gray-400 mb-6">
                   Create an invite code to share with others
@@ -238,15 +238,10 @@ export const InviteModal = ({ isOpen, onClose }: InviteModalProps) => {
               </div>
             ) : (
               <div className="space-y-4">
-                {/* QR Code */}
-                <div className="flex justify-center p-4 bg-white rounded-lg">
-                  <QRCodeSVG value={inviteCode} size={200} level="M" />
-                </div>
-
                 {/* Code Display */}
                 <div>
                   <label className="block text-sm font-medium mb-2">
-                    Invite Code (scan QR or copy text)
+                    Invite Code (copy and share)
                   </label>
                   <div className="relative">
                     <textarea

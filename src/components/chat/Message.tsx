@@ -37,18 +37,20 @@ export const Message = ({ message }: MessageProps) => {
   };
 
   return (
-    <div className={clsx('flex gap-2 mb-4', isSent ? 'justify-end' : 'justify-start')}>
+    <div className={clsx('flex mb-4', isSent ? 'justify-end' : 'justify-start')}>
       {/* Avatar for received messages */}
       {!isSent && sender && (
-        <Avatar
-          src={sender.avatar}
-          name={sender.name}
-          size="sm"
-        />
+        <div className="flex-shrink-0 mr-2">
+          <Avatar
+            src={sender.avatar}
+            name={sender.name}
+            size="sm"
+          />
+        </div>
       )}
 
-      {/* Message bubble */}
-      <div className={clsx('flex flex-col', isSent ? 'items-end' : 'items-start')}>
+      {/* Message wrapper - max-w here resolves against the full-width parent */}
+      <div className={clsx('max-w-[70%] flex flex-col', isSent ? 'items-end' : 'items-start')}>
         {/* Sender name (for group messages) */}
         {!isSent && isGroupMessage && sender && (
           <span className="text-xs text-gray-500 dark:text-gray-400 mb-1 px-1">
@@ -63,7 +65,7 @@ export const Message = ({ message }: MessageProps) => {
             isSent ? 'message-sent' : 'message-received'
           )}
         >
-          <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+          <p className="text-sm whitespace-pre-wrap">{message.content}</p>
         </div>
 
         {/* Timestamp and status */}
@@ -74,9 +76,6 @@ export const Message = ({ message }: MessageProps) => {
           {getStatusIcon()}
         </div>
       </div>
-
-      {/* Spacer for sent messages to align with avatar on the other side */}
-      {isSent && <div className="w-8" />}
     </div>
   );
 };

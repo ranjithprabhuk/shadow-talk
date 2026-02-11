@@ -26,15 +26,15 @@
   }
 
   .message-bubble {
-    @apply max-w-[70%] px-4 py-2 rounded-2xl break-words;
+    @apply px-4 py-2 rounded-2xl break-words;
   }
 
   .message-sent {
-    @apply bg-primary-500 text-white ml-auto rounded-br-sm;
+    @apply bg-primary-500 text-white rounded-br-sm;
   }
 
   .message-received {
-    @apply bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 mr-auto rounded-bl-sm;
+    @apply bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded-bl-sm;
   }
 }
 

@@ -19,6 +19,7 @@ export class SignalingService {
   static encodeOffer(
     peerId: string,
     offer: RTCSessionDescriptionInit,
+    candidates: RTCIceCandidateInit[],
     userInfo: PeerInfo
   ): string {
     const payload: EncodedOffer = {
@@ -26,6 +27,7 @@ export class SignalingService {
       data: {
         peerId,
         offer,
+        candidates,
         userInfo,
         timestamp: Date.now(),
       },
@@ -42,6 +44,7 @@ export class SignalingService {
   static encodeAnswer(
     peerId: string,
     answer: RTCSessionDescriptionInit,
+    candidates: RTCIceCandidateInit[],
     userInfo: PeerInfo
   ): string {
     const payload: EncodedAnswer = {
@@ -49,6 +52,7 @@ export class SignalingService {
       data: {
         peerId,
         answer,
+        candidates,
         userInfo,
         timestamp: Date.now(),
       },

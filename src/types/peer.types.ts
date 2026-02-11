@@ -27,6 +27,7 @@ export interface SignalingData {
 export interface ConnectionOffer {
   peerId: string;
   offer: RTCSessionDescriptionInit;
+  candidates: RTCIceCandidateInit[];
   userInfo: PeerInfo;
   timestamp: number;
 }
@@ -34,6 +35,7 @@ export interface ConnectionOffer {
 export interface ConnectionAnswer {
   peerId: string;
   answer: RTCSessionDescriptionInit;
+  candidates: RTCIceCandidateInit[];
   userInfo: PeerInfo;
   timestamp: number;
 }

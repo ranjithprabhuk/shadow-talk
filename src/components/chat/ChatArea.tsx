@@ -61,18 +61,12 @@ export const ChatArea = () => {
     // Send to all peers
     try {
       broadcastMessage(message);
-
       // Update status to sent
       updateGroupMessageStatus(message.payload.id, 'sent');
-
-      // Send delivery receipt
-      setTimeout(() => {
-        updateGroupMessageStatus(message.payload.id, 'delivered');
-      }, 100);
     } catch (error) {
       console.error('Failed to send message:', error);
       updateGroupMessageStatus(message.payload.id, 'failed');
-      toast.error('Failed to send message');
+      toast.error('Failed to send message. Data channel may not be open yet.');
     }
   };
 
